@@ -9,7 +9,10 @@ import matplotlib.pyplot as plt
 import seaborn as sb
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-
+from sklearn.preprocessing import LabelEncoder
+import joblib  
+from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
+        
 app = Flask(__name__)
 
 from flask_cors import CORS
@@ -18,6 +21,7 @@ cors = CORS(app)
 myClient = pymongo.MongoClient("mongodb+srv://ricardo:admin123@clusterinteligentes.5onsapb.mongodb.net/")
 myDb = myClient["Inteligentes"]
 myCol = myDb["Datos"]
+myMoldel = myDb["Modelos"]
 df = "" 
 filename = ""
 
@@ -38,9 +42,13 @@ def upload_file():
         for columna in columnas:
             if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
                 df = df.dropna(subset=[columna])
+                labelencoder_X = LabelEncoder()
+                df[columna] = labelencoder_X.fit_transform(df[columna])
             if df[columna].dtypes == 'int64' or df[columna].dtypes == 'float64':
                 print(df[columna].mean())
                 df[columna] = df[columna].fillna(df[columna].mean())
+
+    
         return jsonify({'message': 'Archivo guardado exitosamente.'}), 200
     else:
         return jsonify({'error': 'No se recibió ningún archivo.'}), 400
@@ -95,14 +103,26 @@ def entrenar():
         modelo = ControladorModelo().entrenar(body['modelo'])
         modelo.fit(X_train, y_train)
         y_pred = modelo.predict(X_test)
-        ruta = "Models/"+ filename + body['modelo']+".h5"
-        modelo.save(ruta)
 
+        ruta = "Models/"+ filename.split(".")[0]+"_" + body['modelo']+".pkl"
+        joblib.dump(modelo, ruta)
+        acc = accuracy_score(y_pred, y_test)
+        pre = precision_score(y_pred, y_test, average='macro')
+        rec = recall_score(y_pred, y_test, average='micro')
+        f1 = f1_score(y_pred, y_test, average='weighted')
+        print(acc, pre, rec, f1)
+        task = {"accuracy": acc, "precision": pre, "recall": rec, "f1": f1, "ruta": ruta, "x": body['x'], "y": body['y'], "normalizacion": normalizacion, "tecnica": tecnica, "numero": numero}
+        myMoldel.insert_one(task)
+        
         return jsonify({'message': 'Entrenamiento exitoso.'}), 200
     except AttributeError :
         return jsonify({'error': 'No se ha cargado ningún archivo.'}), 400
-    except Exception:
+    except Exception as e:
+        print(e)
         return jsonify({'error': 'Ha ocurrido un error.'}), 400
+
+
+
 
 @app.route('/predict', methods=['POST'])
 def predict():
