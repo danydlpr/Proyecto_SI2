@@ -12,8 +12,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.preprocessing import LabelEncoder
 import joblib  
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
-import re
-import operator
+from sklearn.model_selection import cross_val_score
 
         
 app = Flask(__name__)
@@ -43,29 +42,26 @@ def upload_file():
         myCol.insert_one(task)
         
         columnas = df.columns
-        
+        # eliminar nulos
         for columna in columnas:
             if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
                 df = df.dropna(subset=[columna])
                 
-                
-                
             if df[columna].dtypes == 'int64' or df[columna].dtypes == 'float64':
                 print(df[columna].mean())
                 df[columna] = df[columna].fillna(df[columna].mean())
+        # se transforman los datos a numericos
         originales=df.copy()
         for columna in columnas:
             if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
                 labelencoder_X = LabelEncoder()
-            
                 df[columna] =  labelencoder_X.fit_transform(df[columna])
         aux=[]
         lista=[]
         dicc={}
+        # se guardan los codigos para la decodificacion
         for columna in columnas:
-            if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
-
-            
+            if originales[columna].dtypes == 'object' or originales[columna].dtypes == 'bool':
                 for valorCod,valorOg in zip(df[columna],originales[columna]):
                     if valorCod not in aux:
                         new={}
@@ -140,6 +136,15 @@ def entrenar():
         pre = precision_score(y_pred, y_test, average='macro')
         rec = recall_score(y_pred, y_test, average='micro')
         f1 = f1_score(y_pred, y_test, average='weighted')
+        if tecnica == 'cross':
+            acc = cross_val_score(modelo, x, y, cv=numero,scoring='accuracy') 
+            acc = acc.mean()
+            pre = cross_val_score(modelo, x, y, cv=numero,scoring='precision_macro')
+            pre = pre.mean()
+            rec = cross_val_score(modelo, x, y, cv=numero,scoring='recall_macro')
+            rec = rec.mean()
+            f1 = cross_val_score(modelo, x, y, cv=numero,scoring='f1_macro')
+            f1 = f1.mean()
         promedio = (acc + pre + rec + f1)/4
         print(acc, pre, rec, f1)
         task = {"accuracy": acc, 
@@ -225,8 +230,7 @@ def predict():
         documento= body['documento']
         prediccion = body['prediccion']
         clf_rf = joblib.load('Models/'+modelo+'.pkl')
-        
-        
+
         doc = myCods.find({ 'documento': documento })
         aux={}
         for documento in doc:
@@ -234,32 +238,37 @@ def predict():
             aux=documento['codigos']
         datos=[]
         y=[]
+        # se decodifican los datos
+        for titulo in prediccion.keys(): 
+            try:
+                valor=prediccion[titulo]
+                arr=aux[titulo]
+                for auxdicc in arr:
+                        if auxdicc['valorOg']==valor:
+                            datos.append(auxdicc['valorCod'])
+                            break
+            except KeyError:
+                datos.append(prediccion[titulo]) # para los datos numericos
+        # se encuentra la columna objetivo
         for titulo in aux.keys():
             try:
                 valor=prediccion[titulo]
                 arr=aux[titulo]
-
-                for auxdicc in arr:
-                    if auxdicc['valorOg']==valor:
-                        datos.append(auxdicc['valorCod'])
-
-                        break
             except:
                 y=aux[titulo]
-            
+
 
         resultado_prediccion = clf_rf.predict([datos])
-        
+        # se decodifica el resultado
         for res in y:
-                    if res['valorCod']==resultado_prediccion.tolist()[0]:
-                        resultado_prediccion=res['valorOg']
-
-                        break
+            if res['valorCod']==resultado_prediccion.tolist()[0]:
+                resultado_prediccion=res['valorOg']
+                break
 
         return jsonify({'prediction': resultado_prediccion}), 200
-    except ValueError :
-        return jsonify({'error': 'Valor no encontrado.'}), 400
-        
+    except ValueError as e :
+        print(e)
+        return jsonify({'error': 'Valor no encontrado.'}), 400     
 
 if __name__ == '__main__':
     app.run(debug=False,port=9000)
