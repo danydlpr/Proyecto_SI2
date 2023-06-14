@@ -67,3 +67,4 @@ predecir cargar un modelo y usa los valores dados para dar una predicción a par
 
 	}
 }
+el nombre del modelo nos lo arroja al momento de entrenar, y el documento al momento de subirlo
