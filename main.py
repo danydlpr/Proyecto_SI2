@@ -12,6 +12,9 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.preprocessing import LabelEncoder
 import joblib  
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, confusion_matrix
+import re
+import operator
+
         
 app = Flask(__name__)
 
@@ -22,6 +25,7 @@ myClient = pymongo.MongoClient("mongodb+srv://ricardo:admin123@clusterinteligent
 myDb = myClient["Inteligentes"]
 myCol = myDb["Datos"]
 myMoldel = myDb["Modelos"]
+myCods = myDb["Codigos"]
 df = "" 
 filename = ""
 
@@ -39,17 +43,43 @@ def upload_file():
         myCol.insert_one(task)
         
         columnas = df.columns
+        
         for columna in columnas:
             if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
                 df = df.dropna(subset=[columna])
-                labelencoder_X = LabelEncoder()
-                df[columna] = labelencoder_X.fit_transform(df[columna])
+                
+                
+                
             if df[columna].dtypes == 'int64' or df[columna].dtypes == 'float64':
                 print(df[columna].mean())
                 df[columna] = df[columna].fillna(df[columna].mean())
+        originales=df.copy()
+        for columna in columnas:
+            if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
+                labelencoder_X = LabelEncoder()
+            
+                df[columna] =  labelencoder_X.fit_transform(df[columna])
+        aux=[]
+        lista=[]
+        dicc={}
+        for columna in columnas:
+            if df[columna].dtypes == 'object' or df[columna].dtypes == 'bool':
 
-    
-        return jsonify({'message': 'Archivo guardado exitosamente.'}), 200
+            
+                for valorCod,valorOg in zip(df[columna],originales[columna]):
+                    if valorCod not in aux:
+                        new={}
+                        new["valorCod"]=valorCod
+                        new["valorOg"]=valorOg
+                        lista.append(new)
+                        aux.append(valorCod)
+                aux=[]
+                dicc[columna]=lista
+                lista=[]
+        task = {"documento":filename,"codigos": dicc}
+        myCods.insert_one(task)
+
+        return jsonify({'message': 'Archivo guardado exitosamente.','nombre':filename}), 200
     else:
         return jsonify({'error': 'No se recibió ningún archivo.'}), 400
     
@@ -110,24 +140,126 @@ def entrenar():
         pre = precision_score(y_pred, y_test, average='macro')
         rec = recall_score(y_pred, y_test, average='micro')
         f1 = f1_score(y_pred, y_test, average='weighted')
+        promedio = (acc + pre + rec + f1)/4
         print(acc, pre, rec, f1)
-        task = {"accuracy": acc, "precision": pre, "recall": rec, "f1": f1, "ruta": ruta, "x": body['x'], "y": body['y'], "normalizacion": normalizacion, "tecnica": tecnica, "numero": numero}
+        task = {"accuracy": acc, 
+                "precision": pre, 
+                "recall": rec,
+                "f1": f1,
+                "ruta": ruta, 
+                "x": body['x'], 
+                "y": body['y'], 
+                "normalizacion": normalizacion, 
+                "tecnica": tecnica,
+                "numero": numero, 
+                "nombre": filename,
+                "promedio": promedio,
+                "modelo": body['modelo'],
+                }
         myMoldel.insert_one(task)
         
-        return jsonify({'message': 'Entrenamiento exitoso.'}), 200
+        return jsonify({'message': 'Entrenamiento exitoso.', 'nombre' : ruta}), 200
     except AttributeError :
         return jsonify({'error': 'No se ha cargado ningún archivo.'}), 400
     except Exception as e:
         print(e)
         return jsonify({'error': 'Ha ocurrido un error.'}), 400
+    
+def convertir_a_cadena(documento):
+    documento['_id'] = str(documento['_id'])
+    return documento
+@app.route('/listar', methods=['POST'])
+def listar():
+    body = request.get_json()
+    nombre = body['nombre']
+    
+    resultados = myMoldel.find({ 'nombre': nombre })
+    lista_resultados = []
+    for documento in resultados:
+        documento = convertir_a_cadena(documento)
+        lista_resultados.append(documento['modelo'])
+
+    json_resultados = json.dumps(lista_resultados)
+
+    return  json_resultados, 200
+@app.route('/metricas', methods=['POST'])
+def metricas():
+    body = request.get_json()
+    nombre = body['nombre']
+    
+    resultados = myMoldel.find({ 'nombre': nombre })
+    lista_resultados = []
+    for documento in resultados:
+        documento = convertir_a_cadena(documento)
+        lista_resultados.append(documento)
+
+    json_resultados = json.dumps(lista_resultados)
+
+    return  json_resultados, 200
+@app.route('/mejores', methods=['POST'])
+def mejores():
+    body = request.get_json()
+    nombre = body['nombre']
+    
+    resultados = myMoldel.find({ 'nombre': nombre }).sort('promedio', -1).limit(3)
+    lista_resultados = {}
+    i=1
+    for documento in resultados:
+        documento = convertir_a_cadena(documento)
+        
+        lista_resultados['TOP'+str(i)] = documento
+        i+=1
+        
+    json_resultados = json.dumps(lista_resultados)
+
+    return  json_resultados, 200
 
 
 
 
-@app.route('/predict', methods=['POST'])
+@app.route('/predecir', methods=['POST'])
 def predict():
-    print("predict")
-    return jsonify({'message': 'Predicción exitosa.'}), 200
+    try:
+        body = request.get_json() 
+        modelo = body['modelo']
+        documento= body['documento']
+        prediccion = body['prediccion']
+        clf_rf = joblib.load('Models/'+modelo+'.pkl')
+        
+        
+        doc = myCods.find({ 'documento': documento })
+        aux={}
+        for documento in doc:
+            documento = convertir_a_cadena(documento)
+            aux=documento['codigos']
+        datos=[]
+        y=[]
+        for titulo in aux.keys():
+            try:
+                valor=prediccion[titulo]
+                arr=aux[titulo]
+
+                for auxdicc in arr:
+                    if auxdicc['valorOg']==valor:
+                        datos.append(auxdicc['valorCod'])
+
+                        break
+            except:
+                y=aux[titulo]
+            
+
+        resultado_prediccion = clf_rf.predict([datos])
+        
+        for res in y:
+                    if res['valorCod']==resultado_prediccion.tolist()[0]:
+                        resultado_prediccion=res['valorOg']
+
+                        break
+
+        return jsonify({'prediction': resultado_prediccion}), 200
+    except ValueError :
+        return jsonify({'error': 'Valor no encontrado.'}), 400
+        
 
 if __name__ == '__main__':
     app.run(debug=False,port=9000)
